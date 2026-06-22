@@ -31,9 +31,9 @@ class CertificateResult:
         return data
 
 
-def calculate_status(days_remaining: int) -> str:
+def calculate_status(days_remaining: int, warning_days: int = 30) -> str:
     """Map a whole number of remaining days to a certificate status."""
-    if days_remaining > 30:
+    if days_remaining > warning_days:
         return "OK"
     if days_remaining >= 1:
         return "WARNING"
@@ -57,8 +57,9 @@ def check_certificate(
     domain: str,
     port: int = 443,
     *,
-    timeout: float = 10.0,
+    timeout: float = 5.0,
     now: datetime | None = None,
+    warning_days: int = 30,
 ) -> CertificateResult:
     """Connect to a host and return information from its leaf certificate."""
     domain = domain.strip()
@@ -94,7 +95,7 @@ def check_certificate(
             valid_from=_format_datetime(valid_from),
             valid_to=_format_datetime(valid_to),
             days_remaining=days_remaining,
-            status=calculate_status(days_remaining),
+            status=calculate_status(days_remaining, warning_days),
         )
     except (OSError, ValueError, ssl.SSLError, x509.InvalidVersion) as exc:
         return CertificateResult(
