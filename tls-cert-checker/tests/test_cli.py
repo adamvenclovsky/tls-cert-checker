@@ -33,6 +33,30 @@ def test_cli_reads_domains_file(tmp_path, capsys):
     assert "one.test" in capsys.readouterr().out
 
 
+def test_cli_reads_utf8_bom_domains_file(tmp_path, capsys):
+    domains_file = tmp_path / "domains.txt"
+    domains_file.write_bytes("example.com\n".encode("utf-8-sig"))
+    result = CertificateResult(domain="example.com", port=443, status="OK")
+
+    with patch("tls_cert_checker.cli.check_certificate", return_value=result) as check:
+        exit_code = main(["--file", str(domains_file)])
+
+    assert exit_code == 0
+    check.assert_called_once_with("example.com", 443, timeout=5.0, warning_days=30)
+    capsys.readouterr()
+
+
+def test_cli_reports_invalid_domains_file_encoding(tmp_path, capsys):
+    domains_file = tmp_path / "domains.txt"
+    domains_file.write_bytes(b"\xff\xfe\xfa")
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--file", str(domains_file)])
+
+    assert exc_info.value.code == 2
+    assert "could not read" in capsys.readouterr().err
+
+
 def test_cli_returns_error_exit_code(capsys):
     result = CertificateResult(domain="bad.invalid", port=443, status="ERROR", error="not found")
 
@@ -82,8 +106,13 @@ def test_help_includes_examples(capsys):
 
     assert exc_info.value.code == 0
     output = capsys.readouterr().out
-    assert "Inspect TLS certificates" in output
-    assert "tls-cert-checker example.com --warning-days 14" in output
+    assert "Lightweight TLS certificate inspection CLI." in output
+    assert "Input:" in output
+    assert "Status:" in output
+    assert "Output:" in output
+    assert "Other:" in output
+    assert "tls-cert-checker example.com --show-san" in output
+    assert "tls-cert-checker example.com --timeout 3" in output
 
 
 def test_version(capsys):
@@ -91,7 +120,7 @@ def test_version(capsys):
         main(["--version"])
 
     assert exc_info.value.code == 0
-    assert capsys.readouterr().out.strip() == "tls-cert-checker 0.2.0"
+    assert capsys.readouterr().out.strip() == "tls-cert-checker 0.3.0"
 
 
 def test_cli_passes_timeout(capsys):
@@ -103,3 +132,33 @@ def test_cli_passes_timeout(capsys):
     assert exit_code == 0
     check.assert_called_once_with("example.com", 443, timeout=2.5, warning_days=30)
     capsys.readouterr()
+
+
+@pytest.mark.parametrize("timeout", ["0", "-1", "nan", "inf", "-inf"])
+def test_cli_rejects_invalid_timeout(timeout, capsys):
+    with patch("tls_cert_checker.cli.check_certificate") as check:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["example.com", f"--timeout={timeout}"])
+
+    assert exc_info.value.code == 2
+    assert "finite number greater than zero" in capsys.readouterr().err
+    check.assert_not_called()
+
+
+def test_show_san_affects_text_output(capsys):
+    result = CertificateResult(
+        domain="example.com",
+        port=443,
+        status="OK",
+        subject_alt_names=["example.com", "www.example.com"],
+        san_count=2,
+    )
+
+    with patch("tls_cert_checker.cli.check_certificate", return_value=result):
+        main(["example.com"])
+        without_san = capsys.readouterr().out
+        main(["example.com", "--show-san"])
+        with_san = capsys.readouterr().out
+
+    assert "Subject Alternative Names" not in without_san
+    assert "Subject Alternative Names" in with_san
